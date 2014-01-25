@@ -1,7 +1,7 @@
 
 from setuptools import setup, find_packages
 
-PACKAGE_NAME = "somepackage"
+PACKAGE_NAME = "dyvehr"
 
 setup(
 	name = PACKAGE_NAME,

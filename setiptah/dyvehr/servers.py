@@ -6,6 +6,11 @@ DEBUG = False
 
 
 class Vehicle :
+    """
+    The vehicle is not itself a task-fulfilling agent,
+    but an automata which will handle waypoint tracking, to facilitate
+    multiple vehicular agent types
+    """
     def __init__(self) :
         # parameters
         self._planner = None
@@ -33,8 +38,9 @@ class Vehicle :
         """
         to support very general workspaces:
         planningFunction should give a tuple ( S, x(t) ), of 
-            a total distance S, and
-            a trajectory x(t) returning location for all s \in [0,S]
+            a total distance to target, S, and
+            a trajectory x(t) returning the location of the point s distance along x,
+                for all s \in [0,S]
         """
         self._planner = planningFunction
         
@@ -43,6 +49,9 @@ class Vehicle :
         
     def setLocation(self, location ) :
         self._location = location
+        
+    def location(self) :
+        return self._location
         
         
     """ simulator interface """
@@ -61,13 +70,14 @@ class Vehicle :
             progress = elapsed * self._speed
             self.odometer += progress
             self._trajProgress += progress
-            self._location = self._trajectory( self._trajProgress )
+            newloc = self._trajectory( self._trajProgress )
+            self.setLocation( newloc )
                 
     def _tryschedule(self) :
         # utility
         if self._pendingEvent is None and len( self._waypoints ) > 0 :
             target = self._waypoints[0]
-            trajLength, traj = self._planner( self._location, target )
+            trajLength, traj = self._planner( self.location(), target )
             self._trajectory = traj
             self._trajProgress = 0.
             self._pendingEvent = self.sim.schedule( self.arrived, trajLength / self._speed )
@@ -79,7 +89,8 @@ class Vehicle :
         
         """ have arrived at the waypoint """
         self._pendingEvent = None
-        self._location = self._waypoints.pop(0)
+        target = self._waypoints.pop(0)
+        self.setLocation( target )
         self._trajectory = None
         
         self._arrived()     # report arrival
@@ -95,6 +106,7 @@ class Vehicle :
     def cancelAll(self) :
         # need to update location
         self._stateUpdate()
+        
         # cancel arrival
         next = self._pendingEvent
         next.deactivate()
@@ -103,6 +115,110 @@ class Vehicle :
         self._trajectory = None
         # empty the queue
         self._waypoints = []
+        
+        
+        
+        
+class Taxi :
+    """ vehicular agent whose tasks are pickup-and-delivery tasks """
+    IDLE = 0
+    EMPTY = 1
+    FULL = 2
+    
+    class Demand :
+        def __init__(self, orig, dest, arrivalTime=None ) :
+            # task spec
+            self.origin = orig
+            self.destination = dest
+            
+            # statistics
+            self.arrived = arrivalTime
+            self.embarked = None
+            self.delivered = None
+            
+            
+    def __init__(self) :
+        # messaging interface
+        self._pickup = Signal()         # emited when a demand is picked up
+        self._deliver = Signal()        # emited when a demand is delivered
+        
+        # state variables
+        self.vehicle = Vehicle()
+        self.vehiclePhase = None
+        self._demandQ = []
+        
+        # vehicle signal connections
+        self.vehicle._arrived.connect( self.vehicleArrived )
+        
+        # statistics
+        self.demandLog = []
+        self.currentDemand = None
+        #self.odometer_full = 0.
+        #self.odometer_empty = 0.
+        
+    def join_sim(self, sim ) :
+        self.sim = sim
+        self.vehicle.join_sim( sim )
+        
+    def _tryschedule(self) :
+        if self.currentDemand is None :
+            if len( self._demandQ ) > 0 :
+                dem = self._demandQ[0]
+                self.vehicle.queueWaypoint( dem.origin )
+                self.currentDemand = dem
+                self.vehiclePhase = self.EMPTY
+            else :
+                self.vehiclePhase = self.IDLE
+                
+    """ vehicle configuration pass-thrus """
+    def setPlanner(self, planningFunction ) : self.vehicle.setPlanner(planningFunction)
+    def setSpeed(self, speed ) : self.vehicle.setSpeed(speed)
+    def setLocation(self, location ) : self.vehicle.setLocation(location)
+    
+    def location(self) : return self.vehicle.location()
+    
+    """ simulation messaging interface """
+    # slot
+    def queueDemand(self, demand ) :
+        self.demandLog.append( demand )
+        if True :
+            time = self.sim.get_time()
+            args = ( repr(self), time, repr(demand.origin), repr(demand.destination) )
+            print '%s, got demand at %f: (%s, %s)' % args
+            
+        self._demandQ.append( demand )
+        self._tryschedule()
+        
+    # slot --- switch
+    def vehicleArrived(self) :
+        if self.vehiclePhase == self.EMPTY :
+            self.arrivedOrigin()
+        elif self.vehiclePhase == self.FULL :
+            self.arrivedDestination()
+        else :
+            raise 'vehicle should not be moving'
+        
+    # slot-oid
+    def arrivedOrigin(self) :
+        demand = self._demandQ[0]
+        time = self.sim.get_time()
+        demand.embarked = time
+        
+        self._pickup()      # send signal
+        
+        self.vehicle.queueWaypoint( demand.destination )
+        self.vehiclePhase = self.FULL
+    
+    # slot-oid
+    def arrivedDestination(self) :
+        demand = self._demandQ.pop(0)
+        time = self.sim.get_time()
+        demand.delivered = time
+        
+        self._deliver()     # send signal
+        
+        self.currentDemand = None
+        self._tryschedule()
         
         
         
@@ -123,6 +239,7 @@ if __name__ == '__main__' :
             return self.orig + progress * self.needle
         
     def EuclideanPlanner( orig, dest ) :
+        print orig, dest
         trajLength = np.linalg.norm( np.array(dest) - np.array(orig) )
         traj = EuclideanTraj( orig, dest )
         return trajLength, traj
@@ -133,7 +250,8 @@ if __name__ == '__main__' :
     clock = PoissonClock()
     clock.join_sim( sim )
     
-    veh = Vehicle()
+    #veh = Vehicle()
+    veh = Taxi()
     veh.setPlanner( EuclideanPlanner )
     veh.setLocation( np.zeros(2) )
     veh.setSpeed( 1. )
@@ -144,106 +262,25 @@ if __name__ == '__main__' :
         
     def myarrival() :
         x = np.random.rand(2)
-        veh.queueWaypoint( x )
-        print 'point generated ', x
+        y = np.random.rand(2)
+        time = sim.get_time()
+        demand = Taxi.Demand( x, y, time )
+        print 'demand generated ', x, y, time
+        
+        veh.queueDemand( demand )
         
     def say() :
-        print 'arrived'    
+        print 'delivered'
     
-    clock.source().connect( tick )
+    #clock.source().connect( tick )
     clock.source().connect( myarrival )
-    veh._arrived.connect( say )
-    
+    #veh._arrived.connect( say )
+    veh._deliver.connect( say )
     
     """ run """
     while sim.get_time() <= 50. :
         callback = sim.get_next_action()
         callback()
-    
-    
-
-if False :
-    
-    
-    class Taxi :
-        def __init__(self) :
-            self.ready = Signal()
-            self.odometer = 0.
-            self.odometer_full = 0.
-            self.odometer_empty = 0.
-            
-            self.mylog = []
-            self.notches = 0
-            
-        def set_environment(self, f_dist ) :
-            self.f_dist = f_dist
-            
-        def set_speed(self, speed ) :
-            self.speed = speed
-            
-        def set_location(self, location ) :
-            self.location = location
-            
-        def join_sim(self, sim ) :
-            self.sim = sim
-            self.sim.schedule( self.ready_at )
-            
-        def log_timefull( self, time ) :
-            self.odometer_full += time
-            self.odometer += time
-            
-        def log_timeempty( self, time ) :
-            self.odometer_empty += time
-            self.odometer += time
-            
-            
-        """ signaloid """
-        def ready_at(self) : self.ready( self.location )
-        
-        """ slot """
-        def receive_demand(self, demand ) :
-            self.mylog.append( demand )     # record the demand
-            
-            p, q = demand
-            time = self.sim.get_time()
-            if True : 
-                print '%s, got demand at %f: (%s, %s)' % ( repr( self ), time, repr(p), repr(q) )
-            
-            self.pick = p ; self.delv = q
-            
-            dist_curr_to_pick = self.f_dist( self.location, p )
-            time_curr_to_pick = dist_curr_to_pick / self.speed
-            if DEBUG : print 'moving to pickup, there in %f' % time_curr_to_pick
-            
-            self.next_dist = dist_curr_to_pick
-            self.sim.schedule( self.arrived_at_pickup, time_curr_to_pick )
-            
-        """ auto slot """
-        def arrived_at_pickup(self) :
-            time = self.sim.get_time()
-            self.log_timeempty( self.next_dist )
-            self.location = self.pick
-            if DEBUG : print 'arrived to pickup at %f' % time
-            
-            q = self.delv
-            dist_pick_to_delv = self.f_dist( self.location, q )
-            time_pick_to_delv = dist_pick_to_delv / self.speed
-            if DEBUG : print 'moving to delivery, there in %f' % time_pick_to_delv
-            
-            self.next_dist = dist_pick_to_delv
-            self.sim.schedule( self.delivered, time_pick_to_delv )
-            
-        """ auto slot """
-        def delivered(self) :
-            time = self.sim.get_time()
-            self.log_timefull( self.next_dist )
-            self.location = self.delv
-            time = self.sim.get_time()
-            if DEBUG : print 'delivered at %f' % time
-            
-            self.notches = self.notches + 1
-            
-            self.ready_at()
     
     
 

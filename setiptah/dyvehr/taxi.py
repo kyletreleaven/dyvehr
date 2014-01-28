@@ -261,24 +261,9 @@ if __name__ == '__main__' :
     from setiptah.eventsim.simulation import Simulation
     from setiptah.queuesim.sources import PoissonClock
     
-    from servers import Taxi
+    from euclidean import EuclideanPlanner
     
     
-    # "Planner" for Euclidean geometry
-    class EuclideanTraj :
-        def __init__(self, orig, dest ) :
-            self.orig = np.array( orig )
-            self.needle = np.array( dest ) - self.orig
-            self.needle /= np.linalg.norm( self.needle )
-            
-        def __call__(self, progress ) :
-            return self.orig + progress * self.needle
-        
-    def EuclideanPlanner( orig, dest ) :
-        #print orig, dest
-        trajLength = np.linalg.norm( np.array(dest) - np.array(orig) )
-        traj = EuclideanTraj( orig, dest )
-        return trajLength, traj
     
     """ setup """
     sim = Simulation()

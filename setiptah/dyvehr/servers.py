@@ -2,7 +2,7 @@
 import numpy as np
 from setiptah.eventsim.signaling import Signal, Message
 
-DEBUG = False
+DEBUG = True
 
 
 class Vehicle :
@@ -30,7 +30,7 @@ class Vehicle :
         self.odometer = 0.
                 
         # SIGNALS
-        self._arrived = Signal()
+        self.signalArrived = Signal()
         
         
     """ configuration API """
@@ -103,7 +103,7 @@ class Vehicle :
         
         self._stateUpdate()
         
-        self._arrived()     # report arrival
+        self.signalArrived()     # report arrival
         self._tryschedule() # schedule another waypoint if available
         
     # slot
@@ -151,8 +151,11 @@ class Taxi :
             
     def __init__(self) :
         # messaging interface
-        self._pickup = Signal()         # emited when a demand is picked up
-        self._deliver = Signal()        # emited when a demand is delivered
+        self.signalWakeup = Signal()
+        self.signalAssigned = Signal()
+        self.signalPickup = Signal()         # emited when a demand is picked up
+        self.signalDeliver = Signal()        # emited when a demand is delivered
+        self.signalIdle = Signal()
         
         # state variables
         self.vehicle = Vehicle()
@@ -160,26 +163,42 @@ class Taxi :
         self._demandQ = []
         
         # vehicle signal connections
-        self.vehicle._arrived.connect( self.vehicleArrived )
+        self.vehicle.signalArrived.connect( self.vehicleArrived )
         
         # statistics
         self.demandLog = []
         self.currentDemand = None
+        self.vehiclePhase = self.IDLE
+        
         #self.odometer_full = 0.
         #self.odometer_empty = 0.
         
     def join_sim(self, sim ) :
         self.sim = sim
+        
+        # wake-up call
+        msg = Message( self.signalWakeup, self.location() )
+        self.sim.schedule( msg )
+        
         self.vehicle.join_sim( sim )
         
+    # slotoid
     def _tryschedule(self) :
-        if self.currentDemand is None :
-            if len( self._demandQ ) > 0 :
+        if len( self._demandQ ) > 0 :
+            if self.currentDemand is None :
                 dem = self._demandQ[0]
                 self.vehicle.queueWaypoint( dem.origin )
                 self.currentDemand = dem
                 self.vehiclePhase = self.EMPTY
             else :
+                # we're already working on the first demand
+                pass
+            
+        else :
+            # try to idle the taxi
+            if not self.vehiclePhase == self.IDLE :
+                msg = Message( self.signalIdle, self.location() )
+                self.sim.schedule( msg )
                 self.vehiclePhase = self.IDLE
                 
     """ vehicle configuration pass-thrus """
@@ -193,13 +212,20 @@ class Taxi :
     # slot
     def queueDemand(self, demand ) :
         self.demandLog.append( demand )
-        if True :
+        if DEBUG :
             time = self.sim.get_time()
             args = ( repr(self), time, repr(demand.origin), repr(demand.destination) )
-            print '%s, got demand at %f: (%s, %s)' % args
+            #print '%s, got demand at %f: (%s, %s)' % args
             
         self._demandQ.append( demand )
         self._tryschedule()
+        
+    # slot
+    def appendDemands(self, seq ) :
+        for dem in seq : self.queueDemand( dem )
+        #self.demandLog.extend( seq )
+        #self._demandQ.extend( seq )
+        #self._tryschedule()
         
     # slot --- switch
     def vehicleArrived(self) :
@@ -216,7 +242,7 @@ class Taxi :
         time = self.sim.get_time()
         demand.embarked = time
         
-        self._pickup()      # send signal
+        self.signalPickup()      # send signal, does this need to be scheduled?
         
         self.vehicle.queueWaypoint( demand.destination )
         self.vehiclePhase = self.FULL
@@ -227,7 +253,7 @@ class Taxi :
         time = self.sim.get_time()
         demand.delivered = time
         
-        self._deliver()     # send signal
+        self.signalDeliver()     # send signal, does this need to be scheduled?
         
         self.currentDemand = None
         self._tryschedule()
@@ -238,7 +264,6 @@ class Taxi :
 if __name__ == '__main__' :
     from setiptah.eventsim.simulation import Simulation
     from setiptah.queuesim.sources import PoissonClock
-    
     
     # "Planner" for Euclidean geometry
     class EuclideanTraj :
@@ -255,6 +280,9 @@ if __name__ == '__main__' :
         trajLength = np.linalg.norm( np.array(dest) - np.array(orig) )
         traj = EuclideanTraj( orig, dest )
         return trajLength, traj
+    
+    
+    
     
     """ setup """
     sim = Simulation()
@@ -310,8 +338,8 @@ if __name__ == '__main__' :
     #clock.source().connect( tick )
     clock.source().connect( myarrival )
     #veh._arrived.connect( say )
-    veh._pickup.connect( reportPick )
-    veh._deliver.connect( reportDelv )
+    veh.signalPickup.connect( reportPick )
+    veh.signalDeliver.connect( reportDelv )
     
     """ run """
     while sim.get_time() <= 50. :

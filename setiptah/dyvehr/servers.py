@@ -60,8 +60,8 @@ class Vehicle :
         self._lastUpdate = self.sim.get_time()
     
     def _stateUpdate(self ) :
-        currTime = self.sim.get_time()
         prevTime = self._lastUpdate
+        currTime = self.sim.get_time()
         self._lastUpdate = currTime
         
         # update location if we are moving
@@ -70,28 +70,38 @@ class Vehicle :
             progress = elapsed * self._speed
             self.odometer += progress
             self._trajProgress += progress
-            newloc = self._trajectory( self._trajProgress )
-            self.setLocation( newloc )
-                
+            #print 'progress: %f / %f' % ( self._trajProgress, self._trajLength )
+            #print self._trajProgress - self._trajLength
+            
+            try :
+                newloc = self._trajectory( self._trajProgress )
+                self.setLocation( newloc )
+            except :
+                print self._trajectory, self._trajProgress
+                raise
+            
     def _tryschedule(self) :
         # utility
         if self._pendingEvent is None and len( self._waypoints ) > 0 :
             target = self._waypoints[0]
             trajLength, traj = self._planner( self.location(), target )
+            #print trajLength, traj
             self._trajectory = traj
             self._trajProgress = 0.
+            self._trajLength = trajLength
+            
             self._pendingEvent = self.sim.schedule( self.arrived, trajLength / self._speed )
     
     """ messaging interface """
     # auto-slot
     def arrived(self) :
-        self._stateUpdate()
-        
         """ have arrived at the waypoint """
         self._pendingEvent = None
         target = self._waypoints.pop(0)
         self.setLocation( target )
         self._trajectory = None
+        
+        self._stateUpdate()
         
         self._arrived()     # report arrival
         self._tryschedule() # schedule another waypoint if available
@@ -99,6 +109,8 @@ class Vehicle :
     # slot
     def queueWaypoint(self, waypt ) :
         # an update could be done, but isn't really necessary
+        # false! an update is *totally* necessary
+        self._stateUpdate()
         self._waypoints.append( waypt )
         self._tryschedule()
         
@@ -144,7 +156,7 @@ class Taxi :
         
         # state variables
         self.vehicle = Vehicle()
-        self.vehiclePhase = None
+        #self.vehiclePhase = None
         self._demandQ = []
         
         # vehicle signal connections
@@ -239,7 +251,7 @@ if __name__ == '__main__' :
             return self.orig + progress * self.needle
         
     def EuclideanPlanner( orig, dest ) :
-        print orig, dest
+        #print orig, dest
         trajLength = np.linalg.norm( np.array(dest) - np.array(orig) )
         traj = EuclideanTraj( orig, dest )
         return trajLength, traj
@@ -252,8 +264,29 @@ if __name__ == '__main__' :
     
     #veh = Vehicle()
     veh = Taxi()
-    veh.setPlanner( EuclideanPlanner )
-    veh.setLocation( np.zeros(2) )
+    
+    if False :
+        ORIGIN = np.zeros(2)
+        
+        def samplepoint() :
+            return np.random.rand(2)
+            
+        planner = EuclideanPlanner
+        
+    else :
+        import setiptah.roadgeometry.probability as roadprob
+        from setiptah.roadgeometry.roadmap_paths import RoadmapPlanner
+        
+        roadmap = roadprob.sampleroadnet()
+        U = roadprob.UniformDist( roadmap )
+        samplepoint = U.sample
+        
+        ORIGIN = samplepoint()
+        
+        planner = RoadmapPlanner( roadmap )
+    
+    veh.setPlanner( planner )
+    veh.setLocation( ORIGIN )
     veh.setSpeed( 1. )
     veh.join_sim( sim )
     
@@ -261,21 +294,24 @@ if __name__ == '__main__' :
         print 'tick, %g' % sim.get_time()
         
     def myarrival() :
-        x = np.random.rand(2)
-        y = np.random.rand(2)
+        x = samplepoint()
+        y = samplepoint()
+        
+        #print x, y
         time = sim.get_time()
         demand = Taxi.Demand( x, y, time )
         print 'demand generated ', x, y, time
         
         veh.queueDemand( demand )
         
-    def say() :
-        print 'delivered'
+    def reportPick() : print 'pickup'
+    def reportDelv() : print 'delivery'
     
     #clock.source().connect( tick )
     clock.source().connect( myarrival )
     #veh._arrived.connect( say )
-    veh._deliver.connect( say )
+    veh._pickup.connect( reportPick )
+    veh._deliver.connect( reportDelv )
     
     """ run """
     while sim.get_time() <= 50. :

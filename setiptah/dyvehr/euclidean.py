@@ -1,6 +1,8 @@
 
 import numpy as np
 
+import networkx as nx
+
 
 # "Planner" for Euclidean geometry
 class EuclideanTraj :
@@ -17,3 +19,12 @@ def EuclideanPlanner( orig, dest ) :
     trajLength = np.linalg.norm( np.array(dest) - np.array(orig) )
     traj = EuclideanTraj( orig, dest )
     return trajLength, traj
+
+
+# better off in taxi?
+#from taxi import TaxiScheduler
+
+    
+
+
+

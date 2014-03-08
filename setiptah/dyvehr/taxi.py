@@ -30,6 +30,17 @@ class Taxi :
             
             
     def __init__(self) :
+        """ state """
+        self._demandQ = []
+        self.vehiclePhase = self.IDLE
+        self.currentDemand = None
+        
+        # statistics
+        self.demandLog = []
+        #self.odometer_full = 0.
+        #self.odometer_empty = 0.
+        
+        """ sim interface """
         # messaging interface
         self.signalWakeup = Signal()
         self.signalAssigned = Signal()
@@ -39,20 +50,30 @@ class Taxi :
         
         # state variables
         self.vehicle = Vehicle()
-        #self.vehiclePhase = None
-        self._demandQ = []
-        
         # vehicle signal connections
         self.vehicle.signalArrived.connect( self.vehicleArrived )
         
-        # statistics
-        self.demandLog = []
-        self.currentDemand = None
-        self.vehiclePhase = self.IDLE
         
-        #self.odometer_full = 0.
-        #self.odometer_empty = 0.
+    """ programmer interface """
+    # vehicle pass-thrus
+    def setLocation(self, location ) : self.vehicle.setLocation(location)
+    def location(self) : return self.vehicle.location()
+    def setSpeed(self, speed ) : self.vehicle.setSpeed(speed)
+    def setPlanner(self, planningFunction ) : self.vehicle.setPlanner(planningFunction)
+    
+    # demand queue
+    def _addDemand(self, demand ) :
+        if DEBUG :
+            time = self.sim.get_time()
+            args = ( repr(self), time, repr(demand.origin), repr(demand.destination) )
+            #print '%s, got demand at %f: (%s, %s)' % args
+            
+        self._demandQ.append( demand )
+        self.demandLog.append( demand )
         
+        
+        
+    """ simulation interface """
     def join_sim(self, sim ) :
         self.sim = sim
         
@@ -64,6 +85,7 @@ class Taxi :
         
     # slotoid
     def _tryschedule(self) :
+        # if there are demands waiting, claim one
         if len( self._demandQ ) > 0 :
             if self.currentDemand is None :
                 dem = self._demandQ[0]
@@ -74,40 +96,31 @@ class Taxi :
                 # we're already working on the first demand
                 pass
             
+        # otherwise, try to idle the taxi
         else :
-            # try to idle the taxi
             if not self.vehiclePhase == self.IDLE :
                 msg = Message( self.signalIdle, self.location() )
                 self.sim.schedule( msg )
                 self.vehiclePhase = self.IDLE
                 
-    """ vehicle configuration pass-thrus """
-    def setPlanner(self, planningFunction ) : self.vehicle.setPlanner(planningFunction)
-    def setSpeed(self, speed ) : self.vehicle.setSpeed(speed)
-    def setLocation(self, location ) : self.vehicle.setLocation(location)
-    
-    def location(self) : return self.vehicle.location()
-    
+    # slotoid
+    def _activate(self) :
+        if self.vehiclePhase == self.IDLE :
+            self.vehiclePhase = self.EMPTY      # target should already be None
+        self._tryschedule()
+        
     """ simulation messaging interface """
     # slot
     def queueDemand(self, demand ) :
-        self.demandLog.append( demand )
-        if DEBUG :
-            time = self.sim.get_time()
-            args = ( repr(self), time, repr(demand.origin), repr(demand.destination) )
-            #print '%s, got demand at %f: (%s, %s)' % args
-            
-        self._demandQ.append( demand )
-        self._tryschedule()
+        self._addDemand( demand )
+        self._activate()
         
     # slot
     def appendDemands(self, seq ) :
-        for dem in seq : self.queueDemand( dem )
-        #self.demandLog.extend( seq )
-        #self._demandQ.extend( seq )
-        #self._tryschedule()
+        for dem in seq : self._addDemand( dem )
+        self._activate()
         
-    # slot --- switch
+    # auto-slot? --- switch
     def vehicleArrived(self) :
         if self.vehiclePhase == self.EMPTY :
             self.arrivedOrigin()
@@ -156,7 +169,7 @@ class TaxiScheduler :
         """
         demands is an iterable of, e.g., TaxiDemands;
         agentLocations is a dict whose keys are taxi agents and whose values are their locations
-        returns as dict whose keys are agents and whose values are lists of their assigned demands, in order
+        returns as dict whose keys are agents and whose values are lists of their assigned demands, *in order*
         """
         raise NotImplementedError('please implemented scheduling algorithm')
 
@@ -164,18 +177,49 @@ class TaxiScheduler :
 class RoundRobinScheduler(TaxiScheduler) :
     """ a quick, simple round robin scheduler, for the unit test """
     def __call__(self, demands, agentLocations ) :
-        print 'GOT CALLED'
+        #print 'GOT CALLED'
         agents = agentLocations.keys()
         agents = list( agents )
+        #print agents, type(agents)
         
-        schedule = {}
-        for dem in demands :
-            i = agents.pop(0)
-            schedule.setdefault(i, [] ).append( dem )
-            agents.append( i )
-            
+        if True :
+            # this branch leaves agents out of the dict if they get no demands
+            schedule = {}
+            for dem in demands :
+                i = agents.pop(0)
+                schedule.setdefault(i, [] ).append( dem )   # get me the agent's list (new empty list if not in dictionary), and append demand
+                agents.append( i )
+        else :
+            schedule = {}
+            for a in agents : schedule[a] = []
+            for dem in demands :
+                i = agents.pop(0)
+                schedule[i].append( dem )
+                agents.append( i )
+        
         return schedule
-            
+
+
+
+class EuclideankCraneScheduler(TaxiScheduler) :
+    def __call__(self, demands, agentLocs ) :
+        import setiptah.vehrouting.stackercrane2 as SCP
+        
+        getTail = lambda dem : dem.origin
+        getHead = lambda dem : dem.destination
+        distance = lambda x, y : np.linalg.norm( y - x )
+        
+        assign = SCP.kLARGEARCS( demands, agentLocs, getTail, getHead, distance )
+        assign = { agent : [ demands[i] for i in seq ]
+                  for agent, seq in assign.iteritems() }
+        #print assign
+        
+        return assign
+        
+        #raise NotImplementedError('no impl')
+
+
+
             
 class GatedTaxiDispatch(Dispatch) :
     """
@@ -240,12 +284,19 @@ class GatedTaxiDispatch(Dispatch) :
             print schedule
             
             # schedule the assignment of each agent
-            for child in schedule :
+            scheduled = set()
+            for child, assign in schedule.iteritems() :
+                # short-cut empty assignments;
+                # but first, make sure children are robust
+                #if len( assign ) <= 0 : continue
+                
                 msg = Message( child.output, schedule[child] )
                 self.sim.schedule( msg )
                 
+                scheduled.add( child )
+                
             # all demands assigned and everybody is busy again
-            self._waiting = self._children.difference( schedule )
+            self._waiting = self._children.difference( scheduled )
             #self._waiting.clear()
             self._demandQ = []
             self.sim.schedule( self.emptied )
@@ -258,8 +309,11 @@ class GatedTaxiDispatch(Dispatch) :
 
 
 if __name__ == '__main__' :
+    import matplotlib.pyplot as plt
+    
+    
     from setiptah.eventsim.simulation import Simulation
-    from setiptah.queuesim.sources import PoissonClock
+    from setiptah.queuesim.sources import PoissonClock, UniformClock
     
     from euclidean import EuclideanPlanner
     
@@ -279,6 +333,8 @@ if __name__ == '__main__' :
             return np.random.rand(2)
             
         planner = EuclideanPlanner
+        #scheduler = RoundRobinScheduler()
+        scheduler = EuclideankCraneScheduler()
         
     else :
         import setiptah.roadgeometry.probability as roadprob
@@ -291,10 +347,11 @@ if __name__ == '__main__' :
         ORIGIN = samplepoint()
         
         planner = RoadmapPlanner( roadmap )
+        scheduler = RoundRobinScheduler()
     
     # instantiate the gate
     gate = GatedTaxiDispatch()
-    gate.setScheduler( RoundRobinScheduler() )
+    gate.setScheduler( scheduler )
     
     # instantiate the fleet
     TAXI = []
@@ -331,19 +388,46 @@ if __name__ == '__main__' :
         # send the demand to the gate, not any one taxi
         gate.queueDemand( demand )
         
-    #def reportPick() : print 'pickup'
-    #def reportDelv() : print 'delivery'
+    EVER = 0
+    def increment() :
+        global EVER
+        EVER += 1
     
-    #clock.source().connect( tick )
     clock.source().connect( myarrival )
-    #veh._arrived.connect( say )
-    #veh._pickup.connect( reportPick )
-    #veh._deliver.connect( reportDelv )
+    clock.source().connect( increment )
+        
+        
+    ever_tape = []
+    alive_tape = []
+    def record() :
+        ever_tape.append( EVER )
+        
+        total = len( gate._demandQ )
+        for taxi in TAXI :
+            total += len( taxi._demandQ )
+            
+        alive_tape.append( total )
+    
+    probe = UniformClock(.1)
+    probe.join_sim( sim )
+    probe.source().connect( record )
+    
+    
+    
+    
+    
     
     """ run """
-    while sim.get_time() <= 50. :
+    T = 50.
+    while sim.get_time() <= T :
         callback = sim.get_next_action()
         callback()
+    
+    
+    tocs = len( ever_tape )        # for example
+    time = np.linspace(0,T, tocs )
+    plt.plot( time, ever_tape, time, alive_tape )
+    plt.show()
     
     
     

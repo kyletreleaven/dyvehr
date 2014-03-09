@@ -163,7 +163,7 @@ class Taxi :
 """ Other Taxi Resources """
 
 class TaxiScheduler :
-    """ subclassable abstract class for algorithm to schedule taxi demands """
+    """ *abstract* class for algorithm to schedule taxi demands """
     
     def __call__(self, demands, agentLocations ) :
         """
@@ -172,6 +172,8 @@ class TaxiScheduler :
         returns as dict whose keys are agents and whose values are lists of their assigned demands, *in order*
         """
         raise NotImplementedError('please implemented scheduling algorithm')
+
+
 
 
 class RoundRobinScheduler(TaxiScheduler) :
@@ -201,15 +203,18 @@ class RoundRobinScheduler(TaxiScheduler) :
 
 
 
-class EuclideankCraneScheduler(TaxiScheduler) :
+class kCraneScheduler(TaxiScheduler) :
+    def __init__(self, getTail, getHead, distance ) :
+        self.getTail = getTail
+        self.getHead = getHead
+        self.distance = distance
+    
     def __call__(self, demands, agentLocs ) :
         import setiptah.vehrouting.stackercrane2 as SCP
         
-        getTail = lambda dem : dem.origin
-        getHead = lambda dem : dem.destination
-        distance = lambda x, y : np.linalg.norm( y - x )
-        
-        assign = SCP.kLARGEARCS( demands, agentLocs, getTail, getHead, distance )
+        assign = SCP.kLARGEARCS( demands, agentLocs,
+                                 self.getTail, self.getHead,
+                                 self.distance )
         assign = { agent : [ demands[i] for i in seq ]
                   for agent, seq in assign.iteritems() }
         #print assign
@@ -334,7 +339,12 @@ if __name__ == '__main__' :
             
         planner = EuclideanPlanner
         #scheduler = RoundRobinScheduler()
-        scheduler = EuclideankCraneScheduler()
+        
+        # Euclidean instantiation
+        getTail = lambda dem : dem.origin
+        getHead = lambda dem : dem.destination
+        distance = lambda x, y : np.linalg.norm( y - x )
+        scheduler = kCraneScheduler( getTail, getHead, distance )
         
     else :
         import setiptah.roadgeometry.probability as roadprob
@@ -426,7 +436,7 @@ if __name__ == '__main__' :
     
     tocs = len( ever_tape )        # for example
     time = np.linspace(0,T, tocs )
-    plt.plot( time, ever_tape, time, alive_tape )
+    plt.step( time, ever_tape, time, alive_tape )
     plt.show()
     
     

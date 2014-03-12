@@ -2,11 +2,23 @@
 import numpy as np
 
 # dev
-from vehicle import Vehicle
 from setiptah.eventsim.signaling import Signal, Message
 from setiptah.queuesim.misc import Dispatch
+#
+from setiptah.dyvehr.vehicle import Vehicle
+
 
 DEBUG = False
+
+__authors__ = 'Kyle Treleaven'
+
+__all__ = [
+           'Taxi',
+           'TaxiScheduler',
+           'RoundRobinScheduler',
+           'kCraneScheduler',
+           'GatedTaxiDispatch'
+           ]
 
 
 """ Simple Taxi Agent """
